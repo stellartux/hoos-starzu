@@ -1,6 +1,5 @@
 {
   "editor.formatOnSave": true,
   "editor.rulers": [80],
-  "js/ts.implicitProjectConfig.checkJs": true,
   "editor.formatOnType": true
 }

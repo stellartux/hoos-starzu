@@ -1,21 +1,21 @@
 declare const enum Color {
   BLACK,
-  1,
-  2,
-  3,
-  4,
-  5,
-  6,
-  7,
-  8,
-  9,
-  10,
-  11,
-  12,
-  13,
-  14,
-  15,
-  16,
+  _1,
+  _2,
+  _3,
+  _4,
+  _5,
+  _6,
+  _7,
+  _8,
+  _9,
+  _10,
+  _11,
+  _12,
+  _13,
+  _14,
+  _15,
+  _16,
   WHITE,
 }
 
@@ -35,7 +35,7 @@ declare function drawText(
 
 /**
  * Draw the specified text, wrapping it so that it is no
- * more than width characters wide.
+ * more than width characters wide. The display is 56x20 characters.
  **/
 declare function drawTextWrapped(
   text: string,

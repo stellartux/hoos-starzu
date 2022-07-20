@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "lib": ["ES5", "ES2015", "ES2017.String", "ES2022.String"]
+  },
+  "exclude": ["scene-manager.js"]
+}
