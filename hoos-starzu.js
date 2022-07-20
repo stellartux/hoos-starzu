@@ -180,10 +180,9 @@ Terminal.prototype.onInput = function (/** @type {number} */ key) {
     do this.line.push(32)
     while (this.line.length < 55 && this.line.length & 3)
   } else if (key === 10) { // enter
-    const line = this.lineString()
-    const result = this.interpret(line)
-    this.pushLine(line)
-    this.history.push(line)
+    const result = this.interpret(String.fromCharCode.apply(String, this.line))
+    this.pushLine(this.lineString())
+    this.history.push(this.line.slice())
     this.historyFocus = this.history.length
     if (result !== null) {
       this.pushLine('#═ ' + result)
@@ -191,10 +190,12 @@ Terminal.prototype.onInput = function (/** @type {number} */ key) {
     this.line.length = 0
   } else if (key === 17) { // up arrow
     this.clearLine(this.lines.length)
-    this.line = (this.history[this.historyFocus] || '')
-      .split('')
-      .map(function (/** @type {string} */ c) { return c.charCodeAt(0) })
     this.historyFocus = Math.max(0, this.historyFocus - 1)
+    this.line = this.history[this.historyFocus] || []
+  } else if (key === 18) { // down arrow
+    this.clearLine(this.lines.length)
+    this.historyFocus = Math.min(this.history.length, this.historyFocus + 1)
+    this.line = this.history[this.historyFocus] || []
   } else if (key === 19) { // left arrow
     while (this.line.length > 0 && this.line.pop() !== 32);
   } else if (key === 27) { // escape
@@ -482,13 +483,13 @@ const scenes = {
     'I am Starzu, master hacker pirate extraordinaire. You have entered Hoos Starzu, a secret repository of software all but lost to the mists of obscurity and bitrot. What treasures will you find within?',
     [
       ['DinkySoft SIMPL', 'simplIndex'],
-      ['Libs', 'libs'],
+      ['Libs', 'libsIndex'],
     ]
   ),
-  libs: new Starzu(
+  libsIndex: new Starzu(
     'Libs is a language written by yours truly. It doesn\'t have the professional facade of DinkySoft\'s work, but it has heart. It\s not quite ready to release, but watch this space.',
     [
-      // ['Libs, the language invented by Starzu', ''],
+      // ['Run the Libs REPL', 'libs'],
       ['Back', 'index'],
     ]
   ),
