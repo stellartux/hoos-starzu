@@ -77,7 +77,7 @@ Pager.prototype.onInput = function (/** @type {number} */ key) {
     case 110: // n
       if (this.pageNo !== this.pages.length - 1) this.pageNo++
       break
-    case 112: // p
+    case 98: case 112: // b, p
       if (this.pageNo !== 0) this.pageNo--
       break
     case 113: // q
@@ -96,8 +96,8 @@ Pager.prototype.showPage = function () {
   drawText('Q', 12, 25, 19)
   drawText('uit', 8, 26, 19)
   if (this.pageNo > 0) {
-    drawText('P', 12, 0, 19)
-    drawText('revious', 8, 1, 19)
+    drawText('B', 12, 0, 19)
+    drawText('ack', 8, 1, 19)
   }
   if (this.pageNo < this.pages.length - 1) {
     drawText('N', 12, 52, 19)
@@ -118,7 +118,9 @@ function Terminal(lines, interpreter) {
   this.line = []
   this.tick = 0
   /** @type {(code: string) => any} */
-  this.interpret = interpreter.interpret.bind(interpreter)
+  this.interpret = interpreter
+    ? interpreter.interpret.bind(interpreter)
+    : function () { return null }
 }
 
 Terminal.prototype.concat = function (/** @type {ConcatArray<string>} */ lines) {
@@ -182,12 +184,16 @@ Terminal.prototype.onInput = function (/** @type {number} */ key) {
   } else if (key === 10) { // enter
     const result = this.interpret(String.fromCharCode.apply(String, this.line))
     this.pushLine(this.lineString())
-    this.history.push(this.line.slice())
+    if (this.line.length > 0) this.history.push(this.line.slice())
     this.historyFocus = this.history.length
-    if (result !== null) {
-      this.pushLine('#═ ' + result)
+    if (result === undefined) {
+      throw new Error('TODO multiline code input')
+    } else {
+      if (result !== null) {
+        this.pushLine('#═ ' + result)
+      }
+      this.line.length = 0
     }
-    this.line.length = 0
   } else if (key === 17) { // up arrow
     this.clearLine(this.lines.length)
     this.historyFocus = Math.max(0, this.historyFocus - 1)
@@ -233,8 +239,7 @@ function Simpl() {
     abs: Math.abs,
     cls: function () {
       clearScreen()
-      this.lines.length = 0
-    }
+    },
   }
   this.bindings = Object.create(this.builtIns)
 }
@@ -244,14 +249,19 @@ Simpl.prototype.assert = function (/** @type {any} */ value, /** @type {string} 
 }
 
 Simpl.prototype.interpret = function (/** @type {string} */ code) {
-  return this.evaluate(this.parse(code || ''))
+  const ast = this.parse(code)
+  return ast && this.evaluate(ast)
+}
+
+Simpl.prototype.tokenize = function (/** @type {string} */ code) {
+  return (
+    code.match(/#.*|[-+*/%=!]=?|\.\.?|[(),.]|"([^"]+|"")*"|\d+|\w+/g) || []
+  ).filter(function (t) { return t[0] !== '#' })
 }
 
 Simpl.prototype.parse = function (/** @type {string} */ code) {
   if (!code) return null
-  const tokens = (
-    code.match(/#.*|[-+*/%=!]=?|\.\.?|[(),.]|"([^"]+|"")*"|\d+|\w+/g) || []
-  ).filter(function (t) { return t[0] !== '#' })
+  const tokens = this.tokenize(code)
   if (tokens.length === 0) return null
   return this.statement(tokens)
 }
@@ -369,7 +379,7 @@ Simpl.prototype.binaryExpression = function (/** @type {string[]} */ tokens, /**
   }
 }
 
-Simpl.prototype.unaryExpression = function (/** @type {any[]} */ tokens) {
+Simpl.prototype.unaryExpression = function (/** @type {string[]} */ tokens) {
   if (tokens[0] === '+' || tokens[0] === '-') {
     return {
       type: 'UnaryExpression',
@@ -380,6 +390,28 @@ Simpl.prototype.unaryExpression = function (/** @type {any[]} */ tokens) {
   } else {
     return this.literal(tokens)
   }
+}
+
+/**
+ * @param {string[]} tokens
+ * @param {Identifier} [id]
+ */
+Simpl.prototype.callExpression = function (tokens, id) {
+  const result = {
+    type: 'CallExpression',
+    callee: id || this.identifier(tokens),
+    arguments: []
+  }
+  this.assert(tokens.shift() === '(', 'Expected "("')
+  while (tokens[0] !== ')') {
+    this.assert(tokens.length > 0, 'Unexpected end of input')
+    result.arguments.push(this.expression(tokens))
+    if (tokens[0] !== ')') {
+      this.assert(tokens.shift() === ',', 'Expected ","')
+    }
+  }
+  this.assert(tokens.shift() === ')', 'Unexpected end of input')
+  return result
 }
 
 Simpl.prototype.identifier = function (/** @type {string[]} */ tokens) {
@@ -394,7 +426,7 @@ Simpl.prototype.literal = function (/** @type {string[]} */ tokens) {
   if (tokens[0].match(/^\d/)) {
     return {
       type: 'Literal',
-      value: parseInt(tokens.shift())
+      value: Number(tokens.shift())
     }
   } else if (tokens[0][0] === '"') {
     return {
@@ -412,48 +444,59 @@ Simpl.prototype.literal = function (/** @type {string[]} */ tokens) {
     this.assert(tokens.shift() === ')')
     expr.parenthesised = true
     return expr
+  } else if (tokens[1] === '(') {
+    return this.callExpression(tokens)
   } else {
     return this.identifier(tokens)
   }
 }
 
-/** @type {Record<string, (left: number, right: number) => number>} */
+/** @type {Record<BinaryOperator, (left: number, right: number) => number>} */
 Simpl.prototype.operators = {
   '+': function (left, right) { return left + right },
   '-': function (left, right) { return left - right },
   '*': function (left, right) { return left * right },
-  '/': function (left, right) { return left / right },
+  '/': function (left, right) { return left / right | 0 },
   '%': function (left, right) { return left % right },
 }
 
 Simpl.prototype.evaluators = {
-  AssignmentExpression: function (/** @type {{ operator: string; left: { type: string; name: string; }; right: any; }} */ ast) {
-    if (ast.operator === '=') {
-      if (ast.left.type === 'Identifier') {
-        const right = this.evaluate(ast.right)
-        this.bindings[ast.left.name] = right
-        return right
-      } // TODO: CallExpression, MemberExpression
+  AssignmentExpression: function (/** @type {AssignmentExpression} */ ast) {
+    if (ast.left.type === 'Identifier') {
+      const right = this.evaluate(ast.right)
+      this.bindings[ast.left.name] = right
+      return right
+    } else if (ast.left.type === 'CallExpression') {
+      this.bindings[ast.left.callee.name] = function () {
+        this.evaluate(ast.right)
+      }
+    } else {
+      // @ts-ignore
+      throw new Error("Can't assign to a " + ast.left.type)
     }
-    throw new Error('AssignmentExpression not implemented')
   },
-  BinaryExpression: function (/** @type {{ operator: string | number; left: any; right: any; }} */ ast) {
+  BinaryExpression: function (/** @type {BinaryExpression} */ ast) {
     return this.operators[ast.operator](this.evaluate(ast.left), this.evaluate(ast.right))
   },
-  ExpressionStatement: function (/** @type {{ expression: any; }} */ ast) {
+  CallExpression: function (/** @type {CallExpression} */ ast) {
+    this.assert(ast.callee.name in this.bindings, ast.callee.name + ' is not a function.')
+    const f = this.bindings[ast.callee.name]
+    return f.apply(f, ast.arguments.map(this.evaluate.bind(this)))
+  },
+  ExpressionStatement: function (/** @type {ExpressionStatement} */ ast) {
     return this.evaluate(ast.expression)
   },
-  Identifier: function (/** @type {{ name: string; }} */ ast) {
+  Identifier: function (/** @type {Identifier}} */ ast) {
     if (ast.name in this.bindings) {
       return this.bindings[ast.name]
     } else {
       return null
     }
   },
-  Literal: function (/** @type {{ value: any; }} */ ast) {
+  Literal: function (/** @type {Literal} */ ast) {
     return ast.value
   },
-  UnaryExpression: function (/** @type {{ operator: string; argument: any; }} */ ast) {
+  UnaryExpression: function (/** @type {UnaryExpression} */ ast) {
     if (ast.operator === '+') {
       return this.evaluate(ast.argument)
     } else if (ast.operator === '-') {
@@ -466,7 +509,7 @@ Simpl.prototype.evaluators = {
   }
 }
 
-Simpl.prototype.evaluate = function (/** @type {any} */ ast) {
+Simpl.prototype.evaluate = function (/** @type {Node} */ ast) {
   if (!ast) {
     return null
   } else if (ast.type in this.evaluators) {
@@ -510,7 +553,7 @@ const scenes = {
     new Simpl()
   ),
   simplIndex: new Starzu(
-    'I miss the old days of computers. You switch on your machine and a happy little interpreter pops up to see you. Now there are so many layers of complexity between you and the machine. I\'ve been longing for simpler times. I managed to write an emulator for DinkySoft SIMPL from my old Z2 in NETroScript. It\'s amazing what these modern machines can do if you program them to.',
+    'I miss the old days of computers. You switch on your machine and a happy little interpreter pops up to see you. Now there are so many layers of complexity between you and the machine. I\'ve been longing for simpler times. I wrote an emulator for my old Z2 in NETroScript that can manage to run DinkySoft SIMPL. It\'s amazing what these modern machines can do if you program them to.',
     [
       ['Run DinkySoft SIMPL', 'simpl'],
       ['Read the manual', 'simplManual'],
@@ -543,18 +586,18 @@ const scenes = {
       function () {
         drawTextWrapped('Functions are called with arguments in parentheses. Create your own functions by writing to a call. Write longer functions with a do block. Functions return the value of the last statement executed.', 14, 1, 2, 54)
         drawText('half(x) ═ x / 2', 12, 3, 7)
-        drawText('#═ half(x)', 10, 3, 8)
+        drawText('#═ function()    ...', 10, 3, 8)
         drawText('half(6)', 12, 3, 9)
         drawText('#═ 3', 10, 3, 10)
         drawText('triplePlusOne(x) ═ do', 12, 3, 11)
         drawText('x *═ 3', 12, 5, 12)
         drawText('x + 1', 12, 5, 13)
         drawText('end', 12, 3, 14)
-        drawText('#═ triplePlusOne(x)', 10, 3, 15)
+        drawText('#═ function()    ...', 10, 3, 15)
         drawText('triplePlusOne(3)', 12, 3, 16)
         drawText('#═ 10', 10, 3, 17)
       }
-      // TODO if/elif/else, builtins, decide specifics of number syntax
+      // TODO if/elif/else, builtins, decide specifics of number semantics
     ], 'simplIndex'),
   starzu: new Starzu('So you want to know more about the notorious Starzu? ', [['Back', 'index']])
 }
