@@ -176,7 +176,7 @@ Terminal.prototype.onConnect = function () {
 }
 
 Terminal.prototype.onInput = function (/** @type {number} */ key) {
-  if (key === 8) { // backspace
+  if (key === 8 || key == 19) { // backspace or left arrow
     this.line.pop()
   } else if (key === 9) { // tab
     do this.line.push(32)
@@ -184,16 +184,16 @@ Terminal.prototype.onInput = function (/** @type {number} */ key) {
   } else if (key === 10) { // enter
     const result = this.interpret(String.fromCharCode.apply(String, this.line))
     this.pushLine(this.lineString())
-    if (this.line.length > 0) this.history.push(this.line.slice())
+    if (result && this.line.length > 0) this.history.push(this.line.slice())
     this.historyFocus = this.history.length
     if (result === undefined) {
       throw new Error('TODO multiline code input')
-    } else {
-      if (result !== null) {
-        this.pushLine('#═ ' + result)
-      }
-      this.line.length = 0
+    } else if (typeof result === 'function') {
+      this.pushLine('#═ ' + result.realName)
+    } else if (result !== null) {
+      this.pushLine('#═ ' + result)
     }
+    this.line.length = 0
   } else if (key === 17) { // up arrow
     this.clearLine(this.lines.length)
     this.historyFocus = Math.max(0, this.historyFocus - 1)
@@ -203,9 +203,7 @@ Terminal.prototype.onInput = function (/** @type {number} */ key) {
     this.historyFocus = Math.min(this.history.length, this.historyFocus + 1)
     this.line = this.history[this.historyFocus] || []
   } else if (key === 19) { // left arrow
-    while (this.line.length > 0 && this.line.pop() !== 32);
-  } else if (key === 27) { // escape
-    this.draw()
+    return switchToScene('simplIndex')
   } else if (key === 59) { // semicolon
     this.draw()
   } else if (key >= 32 && key <= 126) { // visible characters
@@ -213,6 +211,8 @@ Terminal.prototype.onInput = function (/** @type {number} */ key) {
       this.line.push(key)
       this.drawLine()
     }
+  } else if (key === 127) { // delete
+    while (this.line.length > 0 && this.line.pop() !== 32);
   } else { // hmmm
     drawText(key.toString().padStart(3), 13, 50, 0)
   }
@@ -461,34 +461,49 @@ Simpl.prototype.operators = {
 }
 
 Simpl.prototype.evaluators = {
-  AssignmentExpression: function (/** @type {AssignmentExpression} */ ast) {
+  AssignmentExpression: function (/** @type {AssignmentExpression} */ ast, /** @type {object} */ scope) {
     if (ast.left.type === 'Identifier') {
-      const right = this.evaluate(ast.right)
-      this.bindings[ast.left.name] = right
+      const right = this.evaluate(ast.right, scope)
+      scope[ast.left.name] = right
       return right
     } else if (ast.left.type === 'CallExpression') {
-      this.bindings[ast.left.callee.name] = function () {
-        this.evaluate(ast.right)
-      }
+      const name = ast.left.callee.name
+      scope[name] = function () {
+        const functionScope = Object.create(scope)
+        // @ts-ignore
+        for (let i = 0; i < ast.left.arguments.length; i++) {
+          // @ts-ignore
+          functionScope[ast.left.arguments[i].name] = arguments[i]
+        }
+        return this.evaluate(ast.right, functionScope)
+      }.bind(this)
+      scope[name].realName = name + '(' +
+        ast.left.arguments.map(function (arg) {
+          // @ts-ignore
+          return arg.name
+        }).join(', ') + ')'
+      return scope[name]
     } else {
       // @ts-ignore
       throw new Error("Can't assign to a " + ast.left.type)
     }
   },
-  BinaryExpression: function (/** @type {BinaryExpression} */ ast) {
-    return this.operators[ast.operator](this.evaluate(ast.left), this.evaluate(ast.right))
+  BinaryExpression: function (/** @type {BinaryExpression} */ ast, scope) {
+    return this.operators[ast.operator](this.evaluate(ast.left, scope), this.evaluate(ast.right, scope))
   },
-  CallExpression: function (/** @type {CallExpression} */ ast) {
-    this.assert(ast.callee.name in this.bindings, ast.callee.name + ' is not a function.')
-    const f = this.bindings[ast.callee.name]
-    return f.apply(f, ast.arguments.map(this.evaluate.bind(this)))
+  CallExpression: function (/** @type {CallExpression} */ ast, scope) {
+    this.assert(typeof scope[ast.callee.name] === 'function', ast.callee.name + ' is not a function.')
+    const f = scope[ast.callee.name]
+    return f.apply(f, ast.arguments.map(function (arg) {
+      return this.evaluate(arg, scope)
+    }.bind(this)))
   },
-  ExpressionStatement: function (/** @type {ExpressionStatement} */ ast) {
-    return this.evaluate(ast.expression)
+  ExpressionStatement: function (/** @type {ExpressionStatement} */ ast, scope) {
+    return this.evaluate(ast.expression, scope)
   },
-  Identifier: function (/** @type {Identifier}} */ ast) {
-    if (ast.name in this.bindings) {
-      return this.bindings[ast.name]
+  Identifier: function (/** @type {Identifier}} */ ast, scope) {
+    if (ast.name in scope) {
+      return scope[ast.name]
     } else {
       return null
     }
@@ -496,24 +511,25 @@ Simpl.prototype.evaluators = {
   Literal: function (/** @type {Literal} */ ast) {
     return ast.value
   },
-  UnaryExpression: function (/** @type {UnaryExpression} */ ast) {
+  UnaryExpression: function (/** @type {UnaryExpression} */ ast, scope) {
     if (ast.operator === '+') {
-      return this.evaluate(ast.argument)
+      return this.evaluate(ast.argument, scope)
     } else if (ast.operator === '-') {
-      return -this.evaluate(ast.argument)
+      return -this.evaluate(ast.argument, scope)
     } else if (ast.operator === '!') {
-      return !this.evaluate(ast.argument)
+      return !this.evaluate(ast.argument, scope)
     } else {
       throw new Error('Unimplemented operator: ' + ast.operator)
     }
   }
 }
 
-Simpl.prototype.evaluate = function (/** @type {Node} */ ast) {
+Simpl.prototype.evaluate = function (/** @type {Node} */ ast, scope) {
+  scope = scope || this.bindings
   if (!ast) {
     return null
   } else if (ast.type in this.evaluators) {
-    return this.evaluators[ast.type].bind(this)(ast)
+    return this.evaluators[ast.type].bind(this)(ast, scope)
   } else {
     throw new Error('Unimplemented evaluator: ' + ast.type)
   }
@@ -526,7 +542,8 @@ const scenes = {
     'I am Starzu, master hacker pirate extraordinaire. You have entered Hoos Starzu, a secret repository of software all but lost to the mists of obscurity and bitrot. What treasures will you find within?',
     [
       ['DinkySoft SIMPL', 'simplIndex'],
-      ['Libs', 'libsIndex'],
+      // ['Libs', 'libsIndex'],
+      ['About Me', 'starzu']
     ]
   ),
   libsIndex: new Starzu(
@@ -548,7 +565,8 @@ const scenes = {
       '# DinkySoft™ SIMPL™ v0.1.0',
       '# Structured Imperative Microchip Programming Language',
       '# (c) DinkySoft Corporation 1976',
-      '#',
+      '# Press Esc to exit',
+      '#'
     ],
     new Simpl()
   ),
@@ -567,7 +585,7 @@ const scenes = {
         drawTextWrapped('SIMPL is a programming language which allows novice users an easy way to interact with their machine. Although not as efficient as programming directly in Z2 assembly, SIMPL\'s high level constructs and use of "structured programming" provide a comfortable and approachable introduction to the world of computing. Let\'s explore some of SIMPL\'s features together.', 14, 1, 2, 54)
         drawTextWrapped('Comments in SIMPL are preceded by a #.', 14, 1, 10, 54)
         drawText('# This is a comment', 10, 3, 12)
-        drawTextWrapped('Perform arithmetic with +, -, *, / and %.', 14, 1, 14, 54)
+        drawTextWrapped('Perform integer arithmetic with +, -, *, / and %.', 14, 1, 14, 54)
         drawText('2 + 3 * 4', 12, 3, 16)
         drawText('#═ 14', 10, 3, 17)
       },
@@ -584,22 +602,27 @@ const scenes = {
         drawText('#═ 5', 10, 3, 16)
       },
       function () {
-        drawTextWrapped('Functions are called with arguments in parentheses. Create your own functions by writing to a call. Write longer functions with a do block. Functions return the value of the last statement executed.', 14, 1, 2, 54)
-        drawText('half(x) ═ x / 2', 12, 3, 7)
-        drawText('#═ function()    ...', 10, 3, 8)
-        drawText('half(6)', 12, 3, 9)
-        drawText('#═ 3', 10, 3, 10)
-        drawText('triplePlusOne(x) ═ do', 12, 3, 11)
-        drawText('x *═ 3', 12, 5, 12)
-        drawText('x + 1', 12, 5, 13)
-        drawText('end', 12, 3, 14)
-        drawText('#═ function()    ...', 10, 3, 15)
-        drawText('triplePlusOne(3)', 12, 3, 16)
-        drawText('#═ 10', 10, 3, 17)
+        drawTextWrapped('Functions are called with arguments in parentheses. Create your own functions by writing to a call.', 14, 1, 2, 54)
+        drawText('half(x) ═ x / 2', 12, 3, 5)
+        drawText('#═ half(x)', 10, 3, 6)
+        drawText('half(6)', 12, 3, 7)
+        drawText('#═ 3', 10, 3, 8)
+        // drawTextWrapped('Functions are called with arguments in parentheses. Create your own functions by writing to a call. Write longer functions with a do block. Functions return the value of the last statement executed.', 14, 1, 2, 54)
+        // drawText('half(x) ═ x / 2', 12, 3, 7)
+        // drawText('#═ half(x)', 10, 3, 8)
+        // drawText('half(6)', 12, 3, 9)
+        // drawText('#═ 3', 10, 3, 10)
+        // drawText('triplePlusOne(x) ═ do', 12, 3, 11)
+        // drawText('x *═ 3', 12, 5, 12)
+        // drawText('x + 1', 12, 5, 13)
+        // drawText('end', 12, 3, 14)
+        // drawText('#═ triplePlusOne(x)', 10, 3, 15)
+        // drawText('triplePlusOne(3)', 12, 3, 16)
+        // drawText('#═ 10', 10, 3, 17)
       }
-      // TODO if/elif/else, builtins, decide specifics of number semantics
+      // TODO if/elif/else
     ], 'simplIndex'),
-  starzu: new Starzu('So you want to know more about the notorious Starzu? ', [['Back', 'index']])
+  starzu: new Starzu('So you want to know more about the notorious Starzu? What else can I say except all the legends you\'ve heard about me are true.', [['Back', 'index']])
 }
 
 //////////////////////////////// Scene Manager
@@ -608,8 +631,9 @@ const scenes = {
 let currentScene
 /** @param {string} scene */
 function switchToScene(scene) {
-  if (!scene || !(scene in scenes)) throw new Error(scene + ' is not a scene')
+  if (!scene || !(scene in scenes)) throw new Error(scene + ' is not a scene name')
   currentScene = scenes[scene]
+  clearScreen()
   currentScene.onConnect()
 }
 function onConnect() {
