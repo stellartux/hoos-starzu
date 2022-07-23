@@ -202,7 +202,7 @@ Terminal.prototype.onInput = function (/** @type {number} */ key) {
     this.clearLine(this.lines.length)
     this.historyFocus = Math.min(this.history.length, this.historyFocus + 1)
     this.line = this.history[this.historyFocus] || []
-  } else if (key === 19) { // left arrow
+  } else if (key === 27) { // escape
     return switchToScene('simplIndex')
   } else if (key === 59) { // semicolon
     this.draw()
